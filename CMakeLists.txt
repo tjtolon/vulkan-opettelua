@@ -17,5 +17,7 @@ find_package(fmt CONFIG REQUIRED)  # fmt::fmt
 find_package(spdlog CONFIG REQUIRED) # spdlog::spdlog
 find_package(glfw3 CONFIG REQUIRED) # glfw
 
+include(cmake/vulkanstuff.cmake)
+
 add_subdirectory(kolmio)
 
