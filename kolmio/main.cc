@@ -4,6 +4,8 @@
 #include <spdlog/spdlog.h>
 #include <optional>
 #include <set>
+#include "utils.hh"
+#include <Corrade/Utility/Resource.h>
 
 #define GLFW_INCLUDE_VULKAN
 
@@ -76,6 +78,10 @@ private:
     vk::Extent2D swap_chain_extent;
     std::vector<vk::ImageView> swap_chain_image_views;
 
+    vk::PipelineLayout pipeline_layout;
+    vk::RenderPass render_pass;
+    vk::Pipeline graphics_pipeline;
+
     void initWindow() {
         if (!glfwInit()) {
             throw std::runtime_error("failed to init glfw");
@@ -104,6 +110,7 @@ private:
         createLogicalDevice();
         createSwapChain();
         createImageViews();
+        createRenderPass();
         createGraphicsPipeline();
     }
 
@@ -112,6 +119,9 @@ private:
     }
 
     void cleanup() {
+        logical_device.destroy(graphics_pipeline);
+        logical_device.destroy(pipeline_layout);
+        logical_device.destroy(render_pass);
         for (const auto& image_view : swap_chain_image_views) {
             logical_device.destroy(image_view);
         }
@@ -260,9 +270,9 @@ private:
 
     static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
             VkDebugUtilsMessageSeverityFlagBitsEXT message_severity,
-            VkDebugUtilsMessageTypeFlagsEXT message_type,
+            VkDebugUtilsMessageTypeFlagsEXT /*message_type*/,
             const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
-            void* pUserData) {
+            void* /*pUserData*/) {
         if (message_severity == VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT) {
             spdlog::info("validation layer: {}", pCallbackData->pMessage);
         } else if (message_severity == VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT) {
@@ -501,11 +511,197 @@ private:
     }
 
     void createGraphicsPipeline() {
+        auto vert_shader_module = createShaderModule("shaders/shader.vert.spv");
+        auto frag_shader_module = createShaderModule("shaders/shader.frag.spv");
 
+        vk::PipelineShaderStageCreateInfo vert_stage_info{
+                .sType = vk::PipelineShaderStageCreateInfo::structureType,
+                .stage = vk::ShaderStageFlagBits::eVertex,
+                .module = vert_shader_module,
+                .pName = "main"
+        };
+
+        vk::PipelineShaderStageCreateInfo frag_stage_info{
+                .sType = vk::PipelineShaderStageCreateInfo::structureType,
+                .stage = vk::ShaderStageFlagBits::eFragment,
+                .module = frag_shader_module,
+                .pName = "main"
+        };
+        vk::PipelineShaderStageCreateInfo stages[2] = {vert_stage_info, frag_stage_info};
+
+        vk::PipelineVertexInputStateCreateInfo input_stage_info{
+                .sType = vk::PipelineVertexInputStateCreateInfo::structureType,
+                .vertexBindingDescriptionCount = 0,
+                .pVertexBindingDescriptions = nullptr,
+                .vertexAttributeDescriptionCount = 0,
+                .pVertexAttributeDescriptions = nullptr,
+        };
+
+        vk::PipelineInputAssemblyStateCreateInfo input_assembly_stage_ifno{
+                .sType = vk::PipelineInputAssemblyStateCreateInfo::structureType,
+                .topology = vk::PrimitiveTopology::eTriangleList,
+                .primitiveRestartEnable = VK_FALSE,
+        };
+
+        vk::Viewport viewport{
+                .x = 0.f,
+                .y = 0.f,
+                .width = float(swap_chain_extent.width),
+                .height = float(swap_chain_extent.height),
+                .minDepth = 0.f,
+                .maxDepth = 1.f,
+        };
+
+        vk::Rect2D scissor{
+                .offset = {0, 0},
+                .extent = swap_chain_extent,
+        };
+
+        vk::PipelineViewportStateCreateInfo viewport_state{
+                .sType = vk::PipelineViewportStateCreateInfo::structureType,
+                .viewportCount = 1,
+                .pViewports = &viewport,
+                .scissorCount = 1,
+                .pScissors = &scissor,
+        };
+
+        vk::PipelineRasterizationStateCreateInfo rasterizer{
+                .depthClampEnable = VK_FALSE,
+                .rasterizerDiscardEnable = VK_FALSE,
+                .polygonMode = vk::PolygonMode::eFill,
+                .cullMode = vk::CullModeFlagBits::eBack,
+                .frontFace = vk::FrontFace::eClockwise,
+                .depthBiasEnable = VK_FALSE,
+                .depthBiasConstantFactor = 0.f,
+                .depthBiasClamp = 0.f,
+                .depthBiasSlopeFactor = 0.f,
+                .lineWidth = 1.f,
+        };
+
+        vk::PipelineMultisampleStateCreateInfo multisampling{
+                .sType = vk::PipelineMultisampleStateCreateInfo::structureType,
+                .rasterizationSamples = vk::SampleCountFlagBits::e1,
+                .sampleShadingEnable = VK_FALSE,
+                .minSampleShading = 1.f,
+                .pSampleMask = nullptr,
+                .alphaToCoverageEnable = VK_FALSE,
+                .alphaToOneEnable = VK_FALSE,
+        };
+
+        vk::PipelineColorBlendAttachmentState color_blend_attachment{
+                .blendEnable = VK_FALSE,
+                .srcColorBlendFactor = vk::BlendFactor::eOne,
+                .dstColorBlendFactor = vk::BlendFactor::eZero,
+                .colorBlendOp = vk::BlendOp::eAdd,
+                .srcAlphaBlendFactor = vk::BlendFactor::eOne,
+                .dstAlphaBlendFactor = vk::BlendFactor::eZero,
+                .alphaBlendOp = vk::BlendOp::eAdd,
+                .colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
+                                  vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA,
+        };
+        vk::ArrayWrapper1D<float, 4> w;
+        vk::PipelineColorBlendStateCreateInfo color_blending{
+                .sType = vk::PipelineColorBlendStateCreateInfo::structureType,
+                .logicOpEnable = VK_FALSE,
+                .logicOp = vk::LogicOp::eCopy,
+                .attachmentCount = 1,
+                .pAttachments = &color_blend_attachment,
+                .blendConstants = std::array<float, 4>{0.f, 0.f, 0.f, 0.f},
+        };
+
+        vk::DynamicState dynamic_states[2]{
+                vk::DynamicState::eViewport,
+                vk::DynamicState::eLineWidth
+        };
+        vk::PipelineDynamicStateCreateInfo dynamic_state{
+                .sType = vk::PipelineDynamicStateCreateInfo::structureType,
+                .dynamicStateCount = 2,
+                .pDynamicStates = dynamic_states
+        };
+
+        vk::PipelineLayoutCreateInfo pipeline_layout_info{
+                .sType = vk::PipelineLayoutCreateInfo::structureType,
+                .setLayoutCount = 0,
+                .pSetLayouts = nullptr,
+                .pushConstantRangeCount = 0,
+                .pPushConstantRanges = nullptr,
+        };
+
+        pipeline_layout = logical_device.createPipelineLayout(pipeline_layout_info);
+
+        vk::GraphicsPipelineCreateInfo create_info {
+            .sType = vk::GraphicsPipelineCreateInfo::structureType,
+            .stageCount = 2,
+            .pStages = stages,
+            .pVertexInputState = &input_stage_info,
+            .pInputAssemblyState = &input_assembly_stage_ifno,
+            .pViewportState = &viewport_state,
+            .pRasterizationState = &rasterizer,
+            .pMultisampleState = &multisampling,
+            .pDepthStencilState = nullptr,
+            .pColorBlendState = &color_blending,
+            .pDynamicState = nullptr,
+            .layout = pipeline_layout,
+            .renderPass = render_pass,
+            .subpass = 0,
+            .basePipelineHandle = nullptr,
+            .basePipelineIndex = -1
+        };
+        vk::Result r;
+        std::tie(r, graphics_pipeline) = logical_device.createGraphicsPipeline(vk::PipelineCache{}, create_info);
+
+
+        logical_device.destroy(vert_shader_module);
+        logical_device.destroy(frag_shader_module);
+    }
+
+
+    vk::ShaderModule createShaderModule(const std::string& resource_name) {
+        Corrade::Utility::Resource rs("shaders");
+        auto spirv = rs.getRaw(resource_name);
+        vk::ShaderModuleCreateInfo create_info{
+                .sType = vk::ShaderModuleCreateInfo::structureType,
+                .codeSize = spirv.size(),
+                .pCode = reinterpret_cast<const uint32_t*>(spirv.data()),
+        };
+        return logical_device.createShaderModule(create_info);
+
+    }
+
+    void createRenderPass() {
+        vk::AttachmentDescription color_attachment {
+            .format = swap_chain_image_format,
+            .samples = vk::SampleCountFlagBits::e1,
+            .loadOp = vk::AttachmentLoadOp::eClear,
+            .storeOp = vk::AttachmentStoreOp::eStore,
+            .stencilLoadOp = vk::AttachmentLoadOp::eDontCare,
+            .stencilStoreOp = vk::AttachmentStoreOp::eDontCare,
+            .initialLayout = vk::ImageLayout::eUndefined,
+            .finalLayout = vk::ImageLayout::ePresentSrcKHR,
+        };
+        vk::AttachmentReference color_attachment_ref {
+            .attachment = 0,
+            .layout = vk::ImageLayout::eColorAttachmentOptimal,
+        };
+        vk::SubpassDescription subpass {
+            .pipelineBindPoint = vk::PipelineBindPoint::eGraphics,
+            .colorAttachmentCount = 1,
+            .pColorAttachments = &color_attachment_ref,
+        };
+
+        vk::RenderPassCreateInfo create_info {
+            .sType = vk::RenderPassCreateInfo::structureType,
+            .attachmentCount = 1,
+            .pAttachments = &color_attachment,
+            .subpassCount = 1,
+            .pSubpasses = &subpass,
+        };
+
+        render_pass = logical_device.createRenderPass(create_info);
     }
 };
 
-int main(int argc, char** argv) {
+int main(int /*argc*/, char** /*argv*/) {
     HelloTriangleApplication app;
     try {
         app.run();

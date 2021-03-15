@@ -3,22 +3,11 @@ find_program(GLSLC
         HINTS $ENV{VULKAN_SDK}/bin
         REQUIRED)
 
-find_program(GLSLANG_VALIDATOR
-        glslangValidator
-        HINTS $ENV{VULKAN_SDK}/bin
-        REQUIRED)
-
-find_program(SPIRV_VAL
-        spirv-val
-        HINTS $ENV{VULKAN_SDK}/bin
-        REQUIRED)
-
-find_program(SPIRV_OPT
-        spirv-opt
-        HINTS $ENV{VULKAN_SDK}/bin
-        REQUIRED)
-
-find_program(SPIRV_CROSS
-        spirv-cross
-        HINTS $ENV{VULKAN_SDK}/bin
-        REQUIRED)
+macro(add_shader source)
+    add_custom_command(
+            OUTPUT ${source}.spv
+            DEPENDS ${source}
+            COMMAND
+            ${GLSLC} "${CMAKE_CURRENT_SOURCE_DIR}/${source}" -o "${CMAKE_CURRENT_SOURCE_DIR}/${source}.spv"
+    )
+endmacro()
