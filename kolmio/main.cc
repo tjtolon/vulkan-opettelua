@@ -94,6 +94,8 @@ private:
     std::vector<vk::Fence> images_in_flight;
     size_t current_frame = 0;
 
+    bool frame_buffer_resized = false;
+
 
     void initWindow() {
         if (!glfwInit()) {
@@ -105,6 +107,12 @@ private:
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
         glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
         window = glfwCreateWindow(800, 600, "Vulkan", nullptr, nullptr);
+        glfwSetWindowUserPointer(window, this);
+        glfwSetFramebufferSizeCallback(window, framebufferResizeCallback);
+    }
+    static void framebufferResizeCallback(GLFWwindow* window, int width, int height) {
+        auto app = reinterpret_cast<HelloTriangleApplication*>(glfwGetWindowUserPointer(window));
+        app->frame_buffer_resized = true;
     }
 
     void initVulkan() {
@@ -139,16 +147,11 @@ private:
         logical_device.waitIdle();
     }
 
-    void cleanup() {
-        for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
-            logical_device.destroy(render_finished_semaphores[i]);
-            logical_device.destroy(image_available_semaphores[i]);
-            logical_device.destroy(in_flight_fences[i]);
-        }
-        logical_device.destroy(command_pool);
+    void cleanupSwapChain() {
         for (auto framebuffer : swap_chain_framebuffers) {
             logical_device.destroy(framebuffer);
         }
+        logical_device.freeCommandBuffers(command_pool, command_buffers);
         logical_device.destroy(graphics_pipeline);
         logical_device.destroy(pipeline_layout);
         logical_device.destroy(render_pass);
@@ -156,7 +159,16 @@ private:
             logical_device.destroy(image_view);
         }
         logical_device.destroy(swap_chain);
-        logical_device.destroy();
+    }
+
+    void cleanup() {
+        cleanupSwapChain();
+        for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+            logical_device.destroy(render_finished_semaphores[i]);
+            logical_device.destroy(image_available_semaphores[i]);
+            logical_device.destroy(in_flight_fences[i]);
+        }
+        logical_device.destroy(command_pool);
         if (enable_validation_layers) {
             instance.destroyDebugUtilsMessengerEXT(debug_utils_messenger);
         }
@@ -825,9 +837,9 @@ private:
         vk::SemaphoreCreateInfo create_info{
                 .sType = vk::SemaphoreCreateInfo::structureType,
         };
-        vk::FenceCreateInfo fence_info {
-            .sType = vk::FenceCreateInfo::structureType,
-            .flags = vk::FenceCreateFlagBits::eSignaled,
+        vk::FenceCreateInfo fence_info{
+                .sType = vk::FenceCreateInfo::structureType,
+                .flags = vk::FenceCreateFlagBits::eSignaled,
         };
         for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
             image_available_semaphores[i] = logical_device.createSemaphore(create_info);
@@ -838,13 +850,29 @@ private:
     }
 
     void drawFrame() {
-        logical_device.waitForFences(1, &in_flight_fences[current_frame], VK_TRUE, UINT64_MAX);
+        while (vk::Result::eTimeout ==
+               logical_device.waitForFences(1, &in_flight_fences[current_frame], VK_TRUE, UINT64_MAX));
         uint32_t image_index{};
 
-        logical_device.acquireNextImageKHR(swap_chain, UINT64_MAX, image_available_semaphores[current_frame], nullptr, &image_index);
+        auto result = logical_device.acquireNextImageKHR(swap_chain, UINT64_MAX,
+                                                         image_available_semaphores[current_frame], nullptr,
+                                                         &image_index);
+        switch (result) {
+            case vk::Result::eSuccess:
+                break;
+            case vk::Result::eErrorOutOfDateKHR:
+                recreateSwapChain();
+                break;
+            case vk::Result::eSuboptimalKHR:
+                spdlog::warn("suboptimal KHR");
+                break;
+            default:
+                throw std::runtime_error("Failed to acquire swap chain image!");
+        }
 
         if (images_in_flight[image_index] != vk::Fence{}) {
-            logical_device.waitForFences(1, &images_in_flight[image_index], VK_TRUE, UINT64_MAX);
+            while (vk::Result::eTimeout ==
+                   logical_device.waitForFences(1, &images_in_flight[image_index], VK_TRUE, UINT64_MAX));
         }
         images_in_flight[image_index] = in_flight_fences[current_frame];
 
@@ -862,22 +890,57 @@ private:
                 .pSignalSemaphores = signal_semaphores,
         };
 
-        logical_device.resetFences(1, &in_flight_fences[current_frame]);
+        while (vk::Result::eTimeout == logical_device.resetFences(1, &in_flight_fences[current_frame]));
         graphics_queue.submit(submit_info, in_flight_fences[current_frame]);
 
-        vk:: SwapchainKHR swap_chains[1] = {swap_chain};
-        vk::PresentInfoKHR present_info {
-            .sType = vk::PresentInfoKHR::structureType,
-            .waitSemaphoreCount = 1,
-            .pWaitSemaphores = signal_semaphores,
-            .swapchainCount = 1,
-            .pSwapchains = swap_chains,
-            .pImageIndices = &image_index,
-            .pResults = nullptr,
+        vk::SwapchainKHR swap_chains[1] = {swap_chain};
+        vk::PresentInfoKHR present_info{
+                .sType = vk::PresentInfoKHR::structureType,
+                .waitSemaphoreCount = 1,
+                .pWaitSemaphores = signal_semaphores,
+                .swapchainCount = 1,
+                .pSwapchains = swap_chains,
+                .pImageIndices = &image_index,
+                .pResults = nullptr,
         };
-        present_queue.presentKHR(present_info);
+        try {
+            result = present_queue.presentKHR(present_info);
+        } catch (vk::SystemError& err) {
+            if (err.code() != vk::make_error_code(vk::Result::eErrorOutOfDateKHR)) {
+                throw err;
+            }
+        }
+        if (result == vk::Result::eErrorOutOfDateKHR || result == vk::Result::eSuboptimalKHR || frame_buffer_resized) {
+            frame_buffer_resized = false;
+            recreateSwapChain();
+        } else if (result != vk::Result::eSuccess) {
+            throw std::runtime_error("Some error happened in presentKHR");
+        }
         current_frame = (current_frame + 1) % MAX_FRAMES_IN_FLIGHT;
     }
+
+
+    void recreateSwapChain() {
+        int width = 0;
+        int height = 0;
+        glfwGetFramebufferSize(window, &width, &height);
+        while (width == 0 || height == 0) {
+            glfwGetFramebufferSize(window, &width, &height);
+            glfwWaitEvents();
+        }
+        logical_device.waitIdle();
+
+        cleanupSwapChain();
+
+        createSwapChain();
+        createImageViews();
+        createRenderPass();
+        createGraphicsPipeline();
+        createFramebuffers();
+        createCommandBuffers();
+    }
+
+
 };
 
 int main(int /*argc*/, char** /*argv*/) {
