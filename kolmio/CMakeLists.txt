@@ -8,8 +8,9 @@ add_executable(kolmio
         ${Shaders})
 
 target_include_directories(kolmio SYSTEM PRIVATE $ENV{VULKAN_SDK}/include)
-target_link_libraries(kolmio
+target_link_libraries(kolmio PRIVATE
         ${Vulkan_LIBRARIES}
         glfw
-        fmt::fmt
+        fmt::fmt-header-only
+        spdlog::spdlog_header_only
         Corrade::Utility)

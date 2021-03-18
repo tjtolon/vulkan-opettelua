@@ -110,7 +110,7 @@ private:
         glfwSetWindowUserPointer(window, this);
         glfwSetFramebufferSizeCallback(window, framebufferResizeCallback);
     }
-    static void framebufferResizeCallback(GLFWwindow* window, int width, int height) {
+    static void framebufferResizeCallback(GLFWwindow* window, int, int) {
         auto app = reinterpret_cast<HelloTriangleApplication*>(glfwGetWindowUserPointer(window));
         app->frame_buffer_resized = true;
     }
@@ -267,8 +267,8 @@ private:
     }
 
     bool isDeviceSuitable(const vk::PhysicalDevice& p_dev) {
-        const auto& properties = p_dev.getProperties();
-        const auto& features = p_dev.getFeatures();
+//        const auto& properties = p_dev.getProperties();
+//        const auto& features = p_dev.getFeatures();
         QueueFamilyIndices indices = findQueueFamilies(p_dev);
         bool extensions_supported = checkDeviceExtensionSupport(p_dev);
         bool swap_chain_is_adequate = false;
@@ -384,7 +384,7 @@ private:
     }
 
     void createSurface() {
-        if (glfwCreateWindowSurface(instance, window, nullptr, (VkSurfaceKHR*) &surface) != VK_SUCCESS) {
+        if (glfwCreateWindowSurface(instance, window, nullptr, reinterpret_cast<VkSurfaceKHR*>(&surface)) != VK_SUCCESS) {
             throw std::runtime_error("failed to create window surface");
         };
     }
@@ -650,16 +650,6 @@ private:
                 .attachmentCount = 1,
                 .pAttachments = &color_blend_attachment,
                 .blendConstants = std::array<float, 4>{0.f, 0.f, 0.f, 0.f},
-        };
-
-        vk::DynamicState dynamic_states[2]{
-                vk::DynamicState::eViewport,
-                vk::DynamicState::eLineWidth
-        };
-        vk::PipelineDynamicStateCreateInfo dynamic_state{
-                .sType = vk::PipelineDynamicStateCreateInfo::structureType,
-                .dynamicStateCount = 2,
-                .pDynamicStates = dynamic_states
         };
 
         vk::PipelineLayoutCreateInfo pipeline_layout_info{
