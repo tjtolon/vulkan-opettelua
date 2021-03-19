@@ -19,6 +19,7 @@ find_package(fmt CONFIG REQUIRED)  # fmt::fmt
 find_package(spdlog CONFIG REQUIRED) # spdlog::spdlog
 find_package(glfw3 CONFIG REQUIRED) # glfw
 find_package(Corrade REQUIRED Utility)
+find_package(glm CONFIG REQUIRED)
 set_directory_properties(PROPERTIES CORRADE_USE_PEDANTIC_FLAGS ON)
 
 include(cmake/vulkanstuff.cmake)

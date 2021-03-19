@@ -13,4 +13,6 @@ target_link_libraries(kolmio PRIVATE
         glfw
         fmt::fmt-header-only
         spdlog::spdlog_header_only
-        Corrade::Utility)
+        Corrade::Utility
+        glm::glm
+        )

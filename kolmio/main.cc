@@ -6,6 +6,7 @@
 #include <set>
 #include "utils.hh"
 #include <Corrade/Utility/Resource.h>
+#include <array>
 
 #define GLFW_INCLUDE_VULKAN
 
@@ -47,6 +48,39 @@ struct SwapChainSupportDetails {
     vk::SurfaceCapabilitiesKHR capabilities;
     std::vector<vk::SurfaceFormatKHR> format;
     std::vector<vk::PresentModeKHR> present_modes;
+};
+
+struct Vertex {
+    float pos[2];
+    float color[3];
+
+    static vk::VertexInputBindingDescription getBindingDescription() {
+        vk::VertexInputBindingDescription binding_description{
+                .binding = 0,
+                .stride = sizeof(Vertex),
+                .inputRate = vk::VertexInputRate::eVertex,
+        };
+        return binding_description;
+    }
+
+    static std::array<vk::VertexInputAttributeDescription, 2> getAttributeDescriptions() {
+        std::array<vk::VertexInputAttributeDescription, 2> attribute_descriptions{};
+        attribute_descriptions[0].binding = 0;
+        attribute_descriptions[0].location = 0;
+        attribute_descriptions[0].format = vk::Format::eR32G32Sfloat;
+        attribute_descriptions[0].offset = offsetof(Vertex, pos);
+        attribute_descriptions[1].binding = 0;
+        attribute_descriptions[1].location = 1;
+        attribute_descriptions[1].format = vk::Format::eR32G32B32Sfloat;
+        attribute_descriptions[1].offset = offsetof(Vertex, color);
+        return attribute_descriptions;
+    }
+};
+
+const std::vector<Vertex> vertices{
+        Vertex{{0.f,   -0.5f}, {1.f, 1.f, 1.f}},
+        Vertex{{0.5f,  0.5f},  {0.f, 1.f, 0.f}},
+        Vertex{{-0.5f, 0.5f},  {0.f, 0.f, 1.f}},
 };
 
 const int MAX_FRAMES_IN_FLIGHT = 2;
@@ -96,6 +130,8 @@ private:
 
     bool frame_buffer_resized = false;
 
+    vk::Buffer vertex_buffer;
+    vk::DeviceMemory vertex_buffer_memory;
 
     void initWindow() {
         if (!glfwInit()) {
@@ -135,6 +171,7 @@ private:
         createGraphicsPipeline();
         createFramebuffers();
         createCommandPool();
+        createVertexBuffer();
         createCommandBuffers();
         createSyncObjects();
     }
@@ -163,6 +200,8 @@ private:
 
     void cleanup() {
         cleanupSwapChain();
+        logical_device.destroy(vertex_buffer);
+        logical_device.freeMemory(vertex_buffer_memory);
         for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
             logical_device.destroy(render_finished_semaphores[i]);
             logical_device.destroy(image_available_semaphores[i]);
@@ -572,12 +611,15 @@ private:
         };
         vk::PipelineShaderStageCreateInfo stages[2] = {vert_stage_info, frag_stage_info};
 
+        auto binding_descriptions = Vertex::getBindingDescription();
+        auto attribute_descriptions = Vertex::getAttributeDescriptions();
+
         vk::PipelineVertexInputStateCreateInfo input_stage_info{
                 .sType = vk::PipelineVertexInputStateCreateInfo::structureType,
-                .vertexBindingDescriptionCount = 0,
-                .pVertexBindingDescriptions = nullptr,
-                .vertexAttributeDescriptionCount = 0,
-                .pVertexAttributeDescriptions = nullptr,
+                .vertexBindingDescriptionCount = 1,
+                .pVertexBindingDescriptions = &binding_descriptions,
+                .vertexAttributeDescriptionCount = static_cast<uint32_t>(attribute_descriptions.size()),
+                .pVertexAttributeDescriptions = attribute_descriptions.data(),
         };
 
         vk::PipelineInputAssemblyStateCreateInfo input_assembly_stage_ifno{
@@ -810,7 +852,11 @@ private:
 
             command_buffers[i].bindPipeline(vk::PipelineBindPoint::eGraphics, graphics_pipeline);
 
-            command_buffers[i].draw(3, 1, 0, 0);
+            std::array<vk::Buffer, 1> vertex_buffers = {vertex_buffer};
+            std::array<vk::DeviceSize, 1> offsets = {0};
+            command_buffers[i].bindVertexBuffers(0, vertex_buffers, offsets);
+
+            command_buffers[i].draw(static_cast<uint32_t>(vertices.size()), 1, 0, 0);
 
             command_buffers[i].endRenderPass();
 
@@ -930,6 +976,45 @@ private:
         createCommandBuffers();
     }
 
+    void createVertexBuffer() {
+        vk::BufferCreateInfo buffer_info{
+                .sType = vk::BufferCreateInfo::structureType,
+                .size = sizeof(vertices[0]) * vertices.size(),
+                .usage = vk::BufferUsageFlagBits::eVertexBuffer,
+                .sharingMode = vk::SharingMode::eExclusive,
+        };
+        vertex_buffer = logical_device.createBuffer(buffer_info);
+
+        vk::MemoryRequirements mem_requirements = logical_device.getBufferMemoryRequirements(vertex_buffer);
+
+        vk::MemoryAllocateInfo alloc_info{
+                .sType = vk::MemoryAllocateInfo::structureType,
+                .allocationSize = mem_requirements.size,
+                .memoryTypeIndex = findMemoryType(mem_requirements.memoryTypeBits,
+                                                  {vk::MemoryPropertyFlagBits::eHostVisible |
+                                                   vk::MemoryPropertyFlagBits::eHostCoherent})
+        };
+        vertex_buffer_memory = logical_device.allocateMemory(alloc_info);
+        logical_device.bindBufferMemory(vertex_buffer, vertex_buffer_memory, 0);
+
+        void* data;
+        auto result = logical_device.mapMemory(vertex_buffer_memory, 0, buffer_info.size, {}, &data);
+        if (result != vk::Result::eSuccess) {
+            spdlog::warn("Got a warning in mapping memory");
+        }
+        memcpy(data, vertices.data(), size_t(buffer_info.size));
+        logical_device.unmapMemory(vertex_buffer_memory);
+    }
+
+    uint32_t findMemoryType(uint32_t type_filter, vk::MemoryPropertyFlags properties) {
+        vk::PhysicalDeviceMemoryProperties mem_properties = physical_device.getMemoryProperties();
+        for (uint32_t i = 0; i < mem_properties.memoryTypeCount; ++i) {
+            if (type_filter & (1 << i) && (mem_properties.memoryTypes[i].propertyFlags & properties) == properties) {
+                return i;
+            }
+        }
+        throw std::runtime_error("failed to find suitable memory type");
+    }
 
 };
 
